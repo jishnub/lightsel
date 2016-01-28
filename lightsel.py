@@ -7,12 +7,14 @@ import pyfits
 import scipy.stats
 import os
 
+
 #~ The one where they bin the data
 #######################################################################################################
 #~ Load fits file and read data
 #~ Try reading npz file if possible as it's faster than reading fits
 #~ Create the file if not there so that reading will be faster second time onwards
 fitsfile = 'data_1.fits'
+directory = os.path.dirname(fitsfile)
 npzfile = os.path.splitext(fitsfile)[0]+'.npz'
 if os.path.exists(npzfile):
     datafile=np.load(npzfile)
@@ -61,10 +63,18 @@ def onpick(event):
         
         for lineobj in start_edges:
             if lineobj.line() == artist:
+                for span in zoom_spans:
+                    if span.start_line == artist:
+                        span.remove()
+                        zoom_spans.remove(span)
                 start_edges.remove(lineobj)
                 
         for lineobj in stop_edges:
             if lineobj.line() == artist:
+                for span in zoom_spans:
+                    if span.stop_line == artist:
+                        span.remove()
+                        zoom_spans.remove(span)
                 stop_edges.remove(lineobj)
         
         #~ Remove the line from the plot
@@ -92,42 +102,42 @@ def onclick(event):
     #~ Note down start time if shift+left click
     if event.button == 1 and shift_pressed:
 
-        start_edges.append(Boundary(event.xdata,"green"))
+        start_edges.append(Edge(event.xdata,"green"))
         
     #~ Note down end time if shift+right click
     elif event.button == 3 and shift_pressed:
         
-        stop_edges.append(Boundary(event.xdata,"red"))
+        stop_edges.append(Edge(event.xdata,"red"))
 
     elif event.button == 1 and control_pressed:
         eventx = event.xdata
         
-        start_times = get_times_from_boundaryobj_list(start_edges)
-        stop_times = get_times_from_boundaryobj_list(stop_edges)
+        #~ start_times = get_times_from_boundaryobj_list(start_edges)
+        #~ stop_times = get_times_from_boundaryobj_list(stop_edges)
         
-        start_times_below = filter(lambda x: x<eventx,start_times)
-        if not start_times_below: return
-        else: lower_start = max(start_times_below)
+        start_edges_below = filter(lambda x: x.timecoord()<eventx,start_edges)
+        if not start_edges_below: return
+        else: lower_start = max(start_edges_below,key=lambda x: x.timecoord())
         
-        stop_times_above = filter(lambda x: x>eventx,stop_times)
-        if not stop_times_above: return
-        else: upper_stop = min(stop_times_above)
+        stop_edges_above = filter(lambda x: x.timecoord()>eventx,stop_edges)
+        if not stop_edges_above: return
+        else: upper_stop = min(stop_edges_above,key=lambda x: x.timecoord())
         
-        #~ start_times_above = filter(lambda x: x>eventx,start_times)
-        #~ if start_times_above: upper_start = min(start_times_above)
-        #~ else: upper_start = None
-        #~ 
-        #~ stop_times_below = filter(lambda x: x<eventx,stop_times)
-        #~ if stop_times_below: lower_stop = max(stop_times_below)
-        #~ else: lower_stop=None
+        start_edges_above = filter(lambda x: x.timecoord()>eventx,start_edges)
+        if start_edges_above: upper_start = min(start_edges_above,key=lambda x: x.timecoord())
+        else: upper_start = None
+        
+        stop_edges_below = filter(lambda x: x.timecoord()<eventx,stop_edges)
+        if stop_edges_below: lower_stop = max(stop_edges_below,key=lambda x: x.timecoord())
+        else: lower_stop=None
         
         #~ print "lower_start",lower_start
         #~ print "upper_stop",upper_stop
         #~ print "lower_stop",lower_stop
         #~ print "upper_start",upper_start
         
-        #~ if upper_start is not None and upper_stop<upper_start and  : return
-        #~ if lower_stop is not None and lower_stop > lower_start : return
+        if upper_start is not None and upper_start.timecoord()<upper_stop.timecoord(): return
+        if lower_stop is not None and lower_stop.timecoord() > lower_start.timecoord() : return
 
         spanobj = Span(lower_start,upper_stop)
         zoom_spans.append(spanobj)
@@ -165,13 +175,13 @@ def onrelease(event):
 #~ The one where they create the line and span objects
 ##############################################################################################################
 
-class Boundary():
+class Edge():
     def __init__(self,xdata,color):
-        self.x = xdata
-        self.vline = plt.axvline(xdata,color=color,linewidth=2,picker=True)
+        self.time = xdata
+        self.vline = plt.axvline(self.time,color=color,linewidth=2,picker=True)
         
     def timecoord(self):
-        return self.x
+        return self.time
         
     def line(self):
         return self.vline
@@ -183,14 +193,17 @@ def get_lines_from_boundaryobj(list_of_objects):
     return map(lambda x: x.line(),list_of_objects)
 
 class Span():
-    def __init__(self,left,right):
-        self.left = left
-        self.right = right
+    def __init__(self,leftline,rightline):
+        self.start_time = leftline.timecoord()
+        self.stop_time = rightline.timecoord()
+        
+        self.start_line = leftline.line()
+        self.stop_line = rightline.line()
         
         self.axvspan=None
         self.zoomfig=None
         
-        self.ind = np.where((times>left) & (times<=right))[0]
+        self.ind = np.where((times>self.start_time) & (times<=self.stop_time))[0]
         self.ind = self.ind[:-(len(self.ind)%1024)]
     
         if not self.ind.any():
@@ -198,7 +211,7 @@ class Span():
         
     def plot(self):
         plt.figure(0)
-        self.axvspan = plt.axvspan(self.left,self.right,color='skyblue',picker=True)
+        self.axvspan = plt.axvspan(self.start_time,self.stop_time,color='skyblue',picker=True)
         plt.draw()
         sel_times = times[self.ind]
         sel_counts = counts[self.ind]
@@ -222,7 +235,11 @@ class Span():
         
     def figure(self): 
         return self.zoomfig
-            
+    
+    def remove(self):
+        self.axvspan.remove()
+        plt.close(self.zoomfig)
+        plt.draw()
 
 #~ The one where they list the start and stop times
 ###########################################################################################################
@@ -287,4 +304,6 @@ for x in range(np.size(start_times)):
 sel_counts = np.array(sel_counts)
 sel_time = np.array(sel_time)
 
-np.savetxt("data_1_cleaned.qdp", np.transpose([sel_time, sel_counts]), fmt=["%.6f","%.6f"])
+file_to_save_to = os.path.join(directory,"data_1_cleaned.qdp")
+print "saving to",file_to_save_to
+np.savetxt(file_to_save_to, np.transpose([sel_time, sel_counts]), fmt=["%.6f","%.6f"])
